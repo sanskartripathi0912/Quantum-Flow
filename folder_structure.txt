@@ -1,0 +1,184 @@
+================================================================================
+                    QUANTUM-FLOW: COMPLETE SYSTEM DOCUMENTATION
+================================================================================
+
+This document provides a comprehensive analysis of the project's folder structure, 
+working infrastructure, operating principles, and execution workflows.
+
+--------------------------------------------------------------------------------
+1. FULL PROJECT DIRECTORY STRUCTURE
+--------------------------------------------------------------------------------
+
+The project follows a modern Next.js 15+ convention using a unified `src/` folder 
+to separate core application logic from root configurations:
+
+C:.
+|   .gitignore             <- Specifies intentionally untracked files to ignore
+|   AGENTS.md              <- Workspace rules and constraints for agent processes
+|   CLAUDE.md              <- Custom dev environment rules
+|   eslint.config.mjs      <- ESLint configuration for code quality checks
+|   folder_structure.txt   <- This documentation file
+|   next.config.ts         <- Next.js framework build/runtime settings
+|   package-lock.json      <- Lockfile pinning exact npm dependency versions
+|   package.json           <- Project dependencies, scripts, and package metadata
+|   postcss.config.mjs     <- PostCSS styling transformations configuration
+|   README.md              <- Markdown system overview and quick-start guide
+|   trigger.config.ts      <- Trigger.dev v3 background task scheduler config
+|   tsconfig.json          <- TypeScript compiler settings and path aliases
+|   
++---public                 <- Static assets accessible under the root URL
+|       file.svg
+|       globe.svg
+|       next.svg
+|       vercel.svg
+|       window.svg
+|       
++---src                    <- Centralized source directory
+|   |   middleware.ts      <- Clerk Authentication middleware protecting routes
+|   |   
+|   +---app                <- Next.js App Router root layout and routing
+|   |   |   favicon.ico
+|   |   |   globals.css    <- Tailwind CSS imports and application-wide styles
+|   |   |   layout.tsx     <- Root layout loading providers (Clerk, React Flow)
+|   |   |   page.tsx       <- Main visual canvas page (guarded by Clerk Auth)
+|   |   |   
+|   |   \---api            <- Next.js backend API endpoints
+|   |       +---crop       <- Endpoint proxying image crops to background queues
+|   |       |       route.ts
+|   |       |       
+|   |       +---gemini     <- Raw endpoint for LLM interactions (fallback/direct)
+|   |       |       route.ts
+|   |       |       
+|   |       +---llm        <- Endpoint proxying LLM generation to background queues
+|   |       |       route.ts
+|   |       |       
+|   |       +---upload     <- Endpoint for file uploads/conversions
+|   |       |       route.ts
+|   |       |       
+|   |       \---workflows  <- CRUD operations for workflow configurations
+|   |           +---load
+|   |           |       route.ts
+|   |           |       
+|   |           \---save
+|   |                   route.ts
+|   |                   
+|   +---components         <- React functional components
+|   |   |   ClientWrapper.tsx <- Root page client boundary
+|   |   |   
+|   |   +---canvas
+|   |   |       WorkflowCanvas.tsx <- Core React Flow canvas and execution engine
+|   |   |       
+|   |   +---nodes          <- Custom React Flow canvas nodes templates
+|   |   |       CropNode.tsx  <- Crop action interface (Yellow/Green status)
+|   |   |       ImageNode.tsx <- Image previewer with Base64 uploader
+|   |   |       LLMNode.tsx   <- Multimodal AI processor and text prompt consumer
+|   |   |       TextNode.tsx  <- Input field for raw string variables
+|   |   |       
+|   |   \---sidebar        <- Layout sidebar navigations
+|   |           LeftSidebar.tsx   <- Drag-and-drop selector to add new nodes
+|   |           RightSidebar.tsx  <- Workflow execution logs history list
+|   |           
+|   +---lib                <- Utility helpers & setup instances
+|   |   \---trigger
+|   |           tasks.ts   <- Mock/Legacy Trigger v2 tasks registry
+|   |           
+|   \---store
+|           useWorkflowStore.ts <- Zustand state store for local reactivity
+|           
+\---trigger                <- Background execution workers (Trigger.dev v3)
+        crop.ts            <- Runs isolated FFmpeg binary filters for crops
+        llm.ts             <- Runs Google Gen AI client library queries
+
+--------------------------------------------------------------------------------
+2. WORKING INFRASTRUCTURE
+--------------------------------------------------------------------------------
+
+Quantum-Flow is architected with a decoupled structure designed to offload heavy 
+computations to background systems.
+
+Client-Side Layer (Frontend):
+  - React Flow provides the visual diagram canvas. It tracks nodes (UI boxes) and 
+    edges (wires connecting nodes).
+  - Zustand manages the client state. Whenever a node is edited, dragged, or runs, 
+    Zustand publishes the update to trigger reactive updates in the UI.
+
+API Routing Gateway Layer (Next.js Server):
+  - Protected by Clerk Middleware (`src/middleware.ts`). All calls to the server 
+    must carry active session credentials.
+  - Endpoints (`/api/crop`, `/api/llm`) do not perform media editing or LLM 
+    queries directly. Direct processing in API routes risks HTTP timeouts and 
+    blocking resources. Instead, they act as controllers delegating tasks.
+
+Task Queue & Worker Layer (Trigger.dev v3):
+  - Trigger.dev acts as an external job queue. It listens for tasks triggered by 
+    the API gateway.
+  - The tasks run on separate Trigger.dev server environments:
+    * `llm-task` runs inside a Node environment, calling Google Gemini.
+    * `crop-image-task` uses a special build extension (`aptGet(["ffmpeg"])`) to 
+       ensure standard system FFmpeg binaries are available in the background 
+       environment.
+
+--------------------------------------------------------------------------------
+3. PROJECT OPERATION
+--------------------------------------------------------------------------------
+
+Workflow Serialization:
+  - Auto-Load: On initial mount, `WorkflowCanvas.tsx` issues a `GET` request to 
+    `/api/workflows/load`. If files exist from previous sessions, they populate 
+    the canvas.
+  - Auto-Save: Every node addition, translation, or edge connection triggers a 
+    debounced hook. After a `1500ms` window, a `POST` request is sent to 
+    `/api/workflows/save` with the current node/edge JSON data.
+
+Real-Time Observability:
+  - While tasks run in the background, Zustand tracks the execution status.
+  - Custom nodes check the `data.status` field:
+    * `"running"` -> Yellow state indicator + spinner text
+    * `"success"` -> Green state indicator + results output display
+    * `"error"`   -> Red state indicator + warning notification
+
+--------------------------------------------------------------------------------
+4. COMPLETE WORKFLOW EXECUTION PIPELINE
+--------------------------------------------------------------------------------
+
+When the user hits the "Run" button, the client-side execution engine parses and 
+processes the nodes systematically:
+
+Step 1: Cycle Validation (DAG check)
+  - The program counts the "in-degree" (incoming connected edges) for all nodes 
+    and checks if they form a cycle using a topological validation routine.
+  - If a loop is found, execution halts, warning the user that workflows must 
+    always flow in a unidirectional path.
+
+Step 2: Level Sorting
+  - The engine resolves levels by running a Kahn's topological sort:
+    * Level 0: Source nodes with `0` incoming inputs (Text Nodes, Image Nodes).
+    * Level 1: Nodes whose inputs depend purely on Level 0 outputs.
+    * Level N: Nodes whose inputs depend on Level N-1 outputs.
+  - Grouping nodes by level allows nodes inside the same level to execute in parallel, 
+    accelerating execution speeds.
+
+Step 3: Level-by-Level Execution Loop
+  - The engine progresses through Level 0 to Level N:
+    * Before running a node, it crawls the connected edges backward to grab the 
+      output values of all source nodes connected to it.
+    * Sets node status to `"running"`.
+    * Dispatches HTTP requests to the Next.js API endpoints.
+
+Step 4: Asynchronous Processing (Delegation & Polling)
+  - The Next.js API endpoint receives the payload and executes:
+    `const handle = await tasks.trigger("task-id", payload);`
+  - Next.js pauses the endpoint execution thread and polls Trigger.dev:
+    `const run = await runs.poll(handle);`
+  - In the background, the Trigger.dev worker picks up the job, runs FFmpeg 
+    filters or communicates with Gemini APIs, writes the outcome, and completes.
+  - The Next.js API receives the completed output from the poll and returns a 
+    standard HTTP JSON response to the client.
+
+Step 5: Visual Update & Log Auditing
+  - The React Flow node changes status to `"success"`, displaying the returned image 
+    or text.
+  - The canvas logs this event by pushing the run parameters, timestamp, and results 
+    to the Zustand `runs` list.
+  - The run immediately appears in the History panel on the Right Sidebar for audit.
+================================================================================
