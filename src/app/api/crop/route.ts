@@ -1,5 +1,5 @@
 import { tasks, runs } from "@trigger.dev/sdk/v3";
-import type { cropImageTask } from "@/trigger/crop"; 
+import type { cropImageTask } from "../../../../trigger/crop";
 
 export async function POST(req: Request) {
   try {

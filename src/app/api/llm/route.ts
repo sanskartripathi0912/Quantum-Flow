@@ -1,5 +1,5 @@
 import { tasks, runs } from "@trigger.dev/sdk/v3";
-import type { llmTask } from "@/trigger/llm"; // Optional: For type safety
+import type { llmTask } from "../../../../trigger/llm"; // Optional: For type safety
 
 export async function POST(req: Request) {
   try {
